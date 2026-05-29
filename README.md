@@ -83,7 +83,21 @@ task up
 ```
 
 Each user then visits `/_webauthn/register` **while authenticated** to add their own device.  
-But wait — they have no credentials yet to authenticate with. Use a temporary registration token:
+But wait — they have no credentials yet to authenticate with. You can do this securely with a bootstrap token:
+
+```bash
+task bootstrap-token USER=alice
+```
+
+This prints a one-time URL like:
+
+```bash
+http://localhost:8000/_webauthn/register?bst=<token>
+```
+
+Open that URL in the new user's browser and tap their authenticator to register the first passkey. The URL is single-use and expires automatically.
+
+Alternatively, if you want invite-style open registration for a limited period, use the registration token flow:
 
 ```bash
 # In docker-compose.yaml or .env, set:
@@ -252,6 +266,7 @@ task destroy               # stop + wipe credentials (prompts)
 task restart               # rebuild + restart proxy only
 task logs                  # tail proxy logs
 task create-user USER=alice  # offline user bootstrap
+task bootstrap-token USER=alice  # generate a pre-init registration URL
 task list-users            # print users.json
 task test                  # smoke-test the running stack
 ```

@@ -105,6 +105,21 @@ func New(cfg *config.Config) (http.Handler, error) {
 	// Credential management (requires authenticated session).
 	mux.Handle("DELETE /_webauthn/api/credentials/{id}", withLimit(wanH.DeleteCredential))
 
+	// Root — 200 if authenticated, redirect to login otherwise.
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		s := sess.Get(r)
+		if s.Authenticated {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "logged in as %s", s.Username)
+			return
+		}
+		http.Redirect(w, r, "/_webauthn/login", http.StatusFound)
+	})
+
 	// Health check
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
