@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.08);
+    padding: 2.5rem 2rem;
+    width: 100%; max-width: 360px;
+    text-align: center;
+  }
+  .icon { font-size: 3rem; margin-bottom: .75rem; }
+  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: .4rem; }
+  p.sub { color: #666; font-size: .9rem; margin-bottom: 1.75rem; }
+  button {
+    width: 100%; padding: .75rem 1rem;
+    background: #2563eb; color: #fff;
+    border: none; border-radius: 8px;
+    font-size: 1rem; font-weight: 500;
+    cursor: pointer; transition: background .15s;
+  }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { background: #93c5fd; cursor: not-allowed; }
+  .msg {
+    margin-top: 1rem; padding: .65rem .9rem;
+    border-radius: 6px; font-size: .875rem;
+    display: none;
+  }
+  .msg.error { background: #fee2e2; color: #991b1b; display: block; }
+  .msg.info  { background: #dbeafe; color: #1e40af; display: block; }
+  .footer { margin-top: 1.5rem; font-size: .8rem; color: #999; }
+  .footer a { color: #2563eb; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">&#x1F4F1;</div>
+  <h1>Sign in</h1>
+  <p class="sub">Use your fingerprint or device unlock to continue.</p>
+  <button id="btn" onclick="authenticate()">Sign in with biometric (3)</button>
+  <div id="msg" class="msg"></div>
+  <!-- Register link intentionally removed (M-7): endpoint is not public.
+       Authenticated users reach /_webauthn/register via the add-device flow;
+       first-time setup uses the bootstrap-token CLI command. -->
+</div>
+
+<script>
+const rd = new URLSearchParams(window.location.search).get('rd') || '/';
+
+// Auto-submit after 3-second countdown unless the user cancels.
+(function startCountdown() {
+  const btn = document.getElementById('btn');
+  let seconds = 3;
+
+  const tick = setInterval(() => {
+    seconds--;
+    if (seconds > 0) {
+      btn.textContent = `Sign in with biometric (${seconds})`;
+    } else {
+      clearInterval(tick);
+      // Only auto-trigger if the button hasn't been disabled (i.e. no prior attempt).
+      if (!btn.disabled) authenticate();
+    }
+  }, 1000);
+
+  // Let the user cancel the countdown by clicking before it fires.
+  btn.addEventListener('click', () => clearInterval(tick), { once: true });
+})();
+
+// ── base64url helpers ────────────────────────────────────────────────────────
+function b64u(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+function b64uDecode(str) {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '='));
+  return Uint8Array.from(binary, c => c.charCodeAt(0)).buffer;
+}
+
+// Convert all base64url-encoded binary fields in the server's assertion options
+// to ArrayBuffers that navigator.credentials.get() expects.
+function decodeAssertionOptions(opts) {
+  const pk = opts.publicKey;
+  pk.challenge = b64uDecode(pk.challenge);
+  if (pk.allowCredentials) {
+    pk.allowCredentials = pk.allowCredentials.map(c => ({
+      ...c, id: b64uDecode(c.id)
+    }));
+  }
+  return opts;
+}
+
+// Encode an AuthenticatorAssertionResponse for JSON transport back to the server.
+function encodeAssertion(cred) {
+  return {
+    id: cred.id,
+    rawId: b64u(cred.rawId),
+    type: cred.type,
+    response: {
+      authenticatorData: b64u(cred.response.authenticatorData),
+      clientDataJSON:    b64u(cred.response.clientDataJSON),
+      signature:         b64u(cred.response.signature),
+      userHandle: cred.response.userHandle ? b64u(cred.response.userHandle) : null,
+    },
+  };
+}
+
+function setMsg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+}
+
+async function authenticate() {
+  const btn = document.getElementById('btn');
+  btn.disabled = true;
+  setMsg('', '');
+
+  try {
+    // 1. Begin — get the challenge from the proxy
+    const beginRes = await fetch('/_webauthn/api/authenticate/begin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rd }),
+    });
+    if (!beginRes.ok) {
+      const err = await beginRes.json();
+      throw new Error(err.error || 'Failed to start authentication');
+    }
+    const opts = decodeAssertionOptions(await beginRes.json());
+
+    // 2. Prompt for biometric
+    const assertion = await navigator.credentials.get(opts);
+
+    // 3. Finish — send the signed assertion to the proxy
+    const finishRes = await fetch('/_webauthn/api/authenticate/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(encodeAssertion(assertion)),
+    });
+    if (!finishRes.ok) {
+      const err = await finishRes.json();
+      throw new Error(err.error || 'Authentication failed');
+    }
+    const result = await finishRes.json();
+    window.location.href = result.redirect || '/';
+  } catch (e) {
+    setMsg(e.message || 'Authentication error', 'error');
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

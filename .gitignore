@@ -1,0 +1,15 @@
+.env
+*.env.local
+/webauthn-proxy
+/dist/
+*.test
+*.out
+coverage.txt
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

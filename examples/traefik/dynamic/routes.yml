@@ -1,0 +1,46 @@
+http:
+
+  # ── Routers ──────────────────────────────────────────────────────────────────
+
+  routers:
+    # WebAuthn proxy UI + API — no auth middleware (would create a redirect loop).
+    # Also exposes /ping for health checks.
+    webauthn:
+      rule: "PathPrefix(`/_webauthn/`) || Path(`/ping`)"
+      service: webauthn-proxy
+      entryPoints: [web]
+
+    # Protected sample app — forward-auth required.
+    # Path-based routing avoids the need to add DNS entries for *.localhost.
+    whoami:
+      rule: "PathPrefix(`/whoami`)"
+      service: whoami
+      middlewares: [webauthn-auth, strip-whoami-prefix]
+      entryPoints: [web]
+
+  # ── Middlewares ───────────────────────────────────────────────────────────────
+
+  middlewares:
+    webauthn-auth:
+      forwardAuth:
+        address: "http://webauthn-proxy:4180/_webauthn/auth"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - "X-Webauthn-User"
+
+    strip-whoami-prefix:
+      stripPrefix:
+        prefixes: ["/whoami"]
+
+  # ── Services ──────────────────────────────────────────────────────────────────
+
+  services:
+    webauthn-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://webauthn-proxy:4180"
+
+    whoami:
+      loadBalancer:
+        servers:
+          - url: "http://whoami:80"

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Register device</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.08);
+    padding: 2.5rem 2rem; width: 100%; max-width: 380px;
+  }
+  .icon { font-size: 2.5rem; text-align: center; margin-bottom: .75rem; }
+  h1 { font-size: 1.4rem; font-weight: 600; text-align: center; margin-bottom: .4rem; }
+  p.sub { color: #666; font-size: .875rem; text-align: center; margin-bottom: 1.75rem; }
+  label { display: block; font-size: .875rem; font-weight: 500; margin-bottom: .35rem; color: #374151; }
+  input[type=text] {
+    width: 100%; padding: .65rem .85rem;
+    border: 1.5px solid #d1d5db; border-radius: 7px;
+    font-size: .95rem; margin-bottom: 1rem;
+    outline: none; transition: border-color .15s;
+  }
+  input[type=text]:focus { border-color: #2563eb; }
+  button {
+    width: 100%; padding: .75rem 1rem;
+    background: #2563eb; color: #fff;
+    border: none; border-radius: 8px;
+    font-size: 1rem; font-weight: 500;
+    cursor: pointer; transition: background .15s;
+    margin-top: .25rem;
+  }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { background: #93c5fd; cursor: not-allowed; }
+  .msg {
+    margin-top: 1rem; padding: .65rem .9rem;
+    border-radius: 6px; font-size: .875rem; display: none;
+  }
+  .msg.error   { background: #fee2e2; color: #991b1b; display: block; }
+  .msg.success { background: #dcfce7; color: #166534; display: block; }
+  .footer { margin-top: 1.5rem; text-align: center; font-size: .8rem; color: #999; }
+  .footer a { color: #2563eb; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">&#x1F511;</div>
+  {{if .LockedUsername}}
+  <h1>Add a new device</h1>
+  <p class="sub">
+    Registering an additional passkey for <strong>{{.LockedUsername}}</strong>.
+    {{if eq .ExistingDevices 1}}You already have 1 device registered.
+    {{else if gt .ExistingDevices 1}}You already have {{.ExistingDevices}} devices registered.
+    {{end}}
+  </p>
+  {{else if .Bootstrap}}
+  <h1>First-run setup</h1>
+  <p class="sub" style="background:#fef9c3;color:#713f12;border-radius:6px;padding:.6rem .8rem;font-size:.82rem;">
+    <strong>No credentials exist yet.</strong> Register the first device to lock down the proxy.
+    This page will no longer be publicly accessible once a credential is stored.
+  </p>
+  {{else}}
+  <h1>Register a device</h1>
+  <p class="sub">Create a passkey so you can sign in with fingerprint or face recognition.</p>
+  {{end}}
+
+  <label for="username">Username</label>
+  {{if .LockedUsername}}
+  <input type="text" id="username" value="{{.LockedUsername}}" readonly
+         style="background:#f3f4f6;cursor:not-allowed;" autocomplete="username" />
+  {{else}}
+  <input type="text" id="username" placeholder="alice" autocomplete="username" />
+  {{end}}
+
+  <label for="displayName">Display name <span style="font-weight:400;color:#9ca3af">(optional)</span></label>
+  <input type="text" id="displayName" placeholder="Alice Smith" autocomplete="name" />
+
+  <label for="deviceName">Device name <span style="font-weight:400;color:#9ca3af">(e.g. MacBook Touch ID)</span></label>
+  <input type="text" id="deviceName" placeholder="MacBook Touch ID" autocomplete="off" />
+
+  <button id="btn" onclick="register()">Register passkey</button>
+  <div id="msg" class="msg"></div>
+  <div class="footer"><a href="/_webauthn/login">&larr; Back to sign in</a></div>
+</div>
+
+<script>
+// Tokens forwarded from the page URL query string.
+const regToken = {{if .Token}}"{{.Token}}"{{else}}""{{end}};
+const bstToken = {{if .BST}}"{{.BST}}"{{else}}""{{end}};
+
+// ── base64url helpers ────────────────────────────────────────────────────────
+function b64u(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+function b64uDecode(str) {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '='));
+  return Uint8Array.from(binary, c => c.charCodeAt(0)).buffer;
+}
+
+// Convert base64url fields in credential creation options to ArrayBuffers.
+function decodeCreationOptions(opts) {
+  const pk = opts.publicKey;
+  pk.challenge = b64uDecode(pk.challenge);
+  pk.user.id   = b64uDecode(pk.user.id);
+  if (pk.excludeCredentials) {
+    pk.excludeCredentials = pk.excludeCredentials.map(c => ({
+      ...c, id: b64uDecode(c.id)
+    }));
+  }
+  return opts;
+}
+
+// Encode a new PublicKeyCredential for JSON transport back to the server.
+function encodeCredential(cred) {
+  const r = cred.response;
+  const encoded = {
+    id:    cred.id,
+    rawId: b64u(cred.rawId),
+    type:  cred.type,
+    response: {
+      attestationObject: b64u(r.attestationObject),
+      clientDataJSON:    b64u(r.clientDataJSON),
+    },
+  };
+  if (r.getTransports) {
+    encoded.response.transports = r.getTransports();
+  }
+  return encoded;
+}
+
+function setMsg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+}
+
+async function register() {
+  const username    = document.getElementById('username').value.trim();
+  const displayName = document.getElementById('displayName').value.trim();
+  const deviceName  = document.getElementById('deviceName').value.trim();
+
+  if (!username) {
+    setMsg('Username is required.', 'error');
+    return;
+  }
+  if (!deviceName) {
+    setMsg('Device name is required.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn');
+  btn.disabled = true;
+  setMsg('', '');
+
+  try {
+    // 1. Begin — get credential creation options
+    const beginRes = await fetch('/_webauthn/api/register/begin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, display_name: displayName, device_name: deviceName, token: regToken, bst: bstToken }),
+    });
+    if (!beginRes.ok) {
+      const err = await beginRes.json();
+      throw new Error(err.error || 'Failed to start registration');
+    }
+    const opts = decodeCreationOptions(await beginRes.json());
+
+    // 2. Prompt for biometric / device unlock
+    const credential = await navigator.credentials.create(opts);
+
+    // 3. Finish — send the attestation to the proxy
+    const finishRes = await fetch('/_webauthn/api/register/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(encodeCredential(credential)),
+    });
+    if (!finishRes.ok) {
+      const err = await finishRes.json();
+      throw new Error(err.error || 'Registration failed');
+    }
+    setMsg('Passkey registered! You can now sign in with your biometric.', 'success');
+    setTimeout(() => window.location.href = '/_webauthn/login', 2000);
+  } catch (e) {
+    setMsg(e.message || 'Registration error', 'error');
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

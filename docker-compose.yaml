@@ -1,0 +1,54 @@
+# Local development stack: Traefik + webauthn-proxy + a sample backend.
+#
+# Routes are defined statically in traefik/dynamic/routes.yml — no Docker
+# socket access required, so this works with rootless Podman as well.
+#
+# First-time setup:
+#   task init   # generate .env
+#   task pull   # pull traefik + whoami images (needs network, run once)
+#   task up     # build proxy, start stack
+
+services:
+
+  traefik:
+    image: docker.io/traefik:v3.0
+    # Static config is loaded from the mounted file; no CLI flags needed.
+    volumes:
+      - ./examples/traefik:/etc/traefik:ro
+    ports:
+      - "8000:8000"
+      # 8080 (Traefik dashboard) intentionally not exposed — api.insecure removed (M-1).
+
+  webauthn-proxy:
+    build: .
+    environment:
+      HTTP_ADDRESS:       ":4180"
+      PROXY_URL:          "http://localhost:8000"
+      COOKIE_SECRET:      "${COOKIE_SECRET:?set COOKIE_SECRET to a 32+ char random string}"
+      COOKIE_NAME:        "_webauthn_proxy"
+      COOKIE_SECURE:      "false"
+      RP_ID:              "localhost"
+      RP_ORIGINS:         "http://localhost:8000"
+      RP_DISPLAY_NAME:    "My Proxy"
+      USERS_FILE:         "/data/users.json"
+      # ALLOW_REGISTRATION=false (default): registration page only accessible to
+      # already-authenticated users (adding a second device).
+      # Bootstrap first user offline: task create-user USER=alice
+      # To enable invite-based web registration, set both to true + a secret token:
+      #   ALLOW_REGISTRATION: "true"
+      #   REGISTRATION_TOKEN: "your-secret-token"
+      # Then share: http://localhost:8000/_webauthn/register?token=your-secret-token
+      ALLOW_REGISTRATION: "false"
+      WHITELIST_DOMAIN:   "localhost"
+    volumes:
+      - webauthn_data:/data
+    expose:
+      - "4180"
+
+  whoami:
+    image: docker.io/traefik/whoami
+    expose:
+      - "80"
+
+volumes:
+  webauthn_data:

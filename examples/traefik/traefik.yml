@@ -1,0 +1,11 @@
+# M-1: dashboard disabled — do not re-enable api.insecure in production.
+# To access the dashboard for debugging, run Traefik locally with a separate
+# config or restrict the management port to a VPN/internal interface.
+
+entryPoints:
+  web:
+    address: ":8000"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
